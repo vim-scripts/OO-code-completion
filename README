@@ -1,0 +1,17 @@
+This is a mirror of http://www.vim.org/scripts/script.php?script_id=501
+
+NOTE:as of  june 17, 2003, this script is no more developped due to lack of time/lack of certain features i miss in ctags. i'll take patches to improve it however, and i have a much more ambitious version (with limited lex/yacc parsing in ruby via racc) on my hard-drive, any contribution is appreciated.
+i don't consider it dead, but in hibernation (especially for the ctags features).
+
+REQUIRES RUBY.
+This plugin will provide functions to get "code completion" in vim.
+it will list all methods for the identifier under the cursor if you call :PossibleFunctions.
+when you start typing a method, it will tell you which methods of the relevant class start by what you typed if you call :PossibleCompletions.
+it works by using gd and ctags to get the class of the relevant object, and ctags to get the list of functions for this object.
+NOTE: this includes inheritance! functions of the class and the parent classes are listed.
+normally also only public member functions are listed.
+This plugin requires tags to be generated with certain parameters (it
+ needs information about inheritance and access of members).
+ You can use the GenerateTags command to generate tags for the current directory.
+
+For now this plugin only supports Java and C++. It should only support OO languages, though I guess it could be used for C structs maybe.
