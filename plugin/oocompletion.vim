@@ -1,6 +1,6 @@
 " written by emmanuel.touzery <emmanuel.touzery@wanadoo.fr>
 " released under the VIM license.
-" version: 0.1
+" version: 0.2
 " This plugin will provide functions to get "code completion" in vim.
 " it will list all methods for the identifier under the cursor.
 " when you start typing a method, it will tell you which methods of the
@@ -19,11 +19,11 @@
 " for now this plugin only supports Java and C++. It should only support OO languages,
 " though I guess it could be used for C structs maybe.
 "
+" any feedback is welcome.. it works for me (tm)
+"
 " REPORTING BUGS: I am using ctags 5.3.1. Please try upgrading if your version is older
-" before reporting a bug (unless you have a fix ;O) )
 " This plugin is untested under windows.
 
-" TODO package with an example of code that WORKS.
 " TODO C++ access (public, private, protected) parsing doesn't seem to work, dunno why.
 " TODO multiple inheritance
 " TODO move the ruby code out of this file except for the printPossibleCompletions method: I have at least another plugin using this code and other people might want to reuse the class too.
@@ -57,10 +57,11 @@ command! -nargs=0 PossibleCompletions call s:PossibleCompletions()
 command! -nargs=0 Type call s:TypeUnderCursor()
 
 function! s:GenerateTags()
-	silent! call system("ctags --fields=+ia *")
+	silent! call system("ctags --file-scope=no -R --fields=+ia *")
 endfunction
 
 function! s:PossibleFunctions()
+" 	echo strftime("%Y %b %d %X")
 	call <SID>Type(expand("<cword>"))
 	if s:type == ""
 		return
@@ -259,8 +260,17 @@ end
 
 class TagList
 	def initialize()
+		# will contain all the tags of the tag file.
 		@tags = Array.new()
 # 		@classByName = Hash.new()
+
+		# will contain an Array<String> containing
+		# names of classes for which there is no tag
+		# and that I do not have to look for again
+		# in the future. eg if you use QT, you might
+		# not have the tag info for all QT classes..
+		# this is for performance (see classByName)
+		@blacklist = Array.new()
 	end
 
 	# parsing. TODO: parse only what I need..
@@ -289,15 +299,16 @@ class TagList
 	def listMethods(className, beginning)
 		puts "****** now listing methods."
 # 		indexa = 0
+		classSearched = classByName(className)
 		@tags.each { |tag|
 #			if (tag.type != "c " && tag.name != tag.className && indexa < 50 && tag.className != "")
 # 				puts "considering " + tag.to_s
 #				indexa = indexa + 1 
 #			end
 			if ( (tag.tagMethod?()) \
-			&& ( (tag.className == className) || inheritance?(className, tag.className) ) \
-			&& (tag.name =~ "^#{beginning}") )
-# 				puts "considering " + tag.to_s
+			&& (tag.name =~ "^#{beginning}") \
+			&& ( (tag.className == className) || inheritance?(classSearched, tag.className) ) )
+#				puts "considering " + tag.to_s
 				# only display public methods:
 				# the "" and nil are WORKAROUNDS for bugs in C++ parsing for now.
 				if ( (tag.access == "public") || (tag.access == "") || (tag.access == nil) )
@@ -309,36 +320,54 @@ class TagList
 
 	# get a Tag object from this TagList and a class name string.
 	def classByName(className)
-		# set up a hash name=>class
-# 		return @classByName[className] if @classByName[className] != nil
+		# we keep a blacklist of classes. For instance
+		# if you are using say QT, you'll have constant references
+		# to QObject, that is not in your tag files.
+		# to avoid checking all the tags looking for this class
+		# each time that I'm asked for it, I just blacklist it once for all.
+		# this happened with KoRect in kword, and the time went from
+		# 12 seconds to instantaneous...
+		return nil if @blacklist.include?(className)
 		@tags.each { |tag|
 			if ( (tag.type == "c") && (tag.name == className) )
 # 				@classByName[className] = tag
 				return tag
 			end
 		}
+		# if we are here, we failed to find the tag for className.
+		# warn the user
+		puts "*** WARNING: no tag information for #{className}. Ignoring it, but the function list might be incomplete."
+		# and blacklist the tag, to avoid to walk the tag list again
+		# for it later.
+		@blacklist.push(className)
 		nil
 	end
 
 	# returns true if A inherits B
-	def inheritance?(classA, classB)
-		tagA = classByName(classA)
-		return if (tagA == nil)
+	def inheritance?(tagA, classB)
+		# it's NOT a bug if tagA is nil.
+		# that just will mean that classByName() returned
+		# nil when calling me recursively (see last line of this
+		# method), and it's fair, if for instance you inherit from
+		# QObject but don't have the tag file for it...
+		# we warn the user in classByName, no reason to crash
+		# one second later for it.
+		return false if (tagA == nil)
 		if (tagA.inherits == classB)
 # 			puts "##"+ classA + "DOES inherit from " + classB
 			return true
 		end
-		if (tagA.inherits == nil)
+		if ( (tagA.inherits == "") || (tagA.inherits == nil) )
 			return false
 		end
 		# that's recursive. eg if A->B->C, A *does*
 		# inherit from C..
-		return inheritance?(tagA.inherits, classB)
+		return inheritance?(classByName(tagA.inherits), classB)
 	end
 
 end
 
-# puts "ruby invoked : " + Time.now.sec.to_s
+# puts "ruby invoked : " + Time.now.min.to_s + ":"+ Time.now.sec.to_s
 taglist = TagList.new()
 taglist.addTags()
 taglist.listMethods(VIM::evaluate("s:type"), VIM::evaluate("s:beginning"))
