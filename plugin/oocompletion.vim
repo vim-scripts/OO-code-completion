@@ -1,6 +1,6 @@
 " written by emmanuel.touzery <emmanuel.touzery@wanadoo.fr>
 " released under the VIM license.
-" version: 0.2
+" version: 0.3
 " This plugin will provide functions to get "code completion" in vim.
 " it will list all methods for the identifier under the cursor.
 " when you start typing a method, it will tell you which methods of the
@@ -8,7 +8,7 @@
 " it works by using gd and ctags to get the class of the relevant object,
 " and ctags to get the list of functions for this object.
 " NOTE: this includes inheritance! functions of the class and the parents
-" classes are listed (TODO: multiple inheritance)
+" classes are listed
 " normally also only public member functions are listed (TODO all methods
 " are listed in C++ due to a parsing bug) (TODO be smart and show only static functions or everything
 " but static functions)
@@ -24,8 +24,25 @@
 " REPORTING BUGS: I am using ctags 5.3.1. Please try upgrading if your version is older
 " This plugin is untested under windows.
 
-" TODO C++ access (public, private, protected) parsing doesn't seem to work, dunno why.
-" TODO multiple inheritance
+
+" TODO it's known that the plugin does not work if you ask for the list of functions
+" IN THE DECLARATION. eg
+" MyClass a;
+" if you ask for the list of functions for a, you will get nothing. The reason is that
+" gd doesn't move the cursor (we are already on the declaration!), therefore the plugin
+" thinks that gd failed. I think it's acceptable because we would be interested in
+" completion only when actually using the object, not when declaring it.
+"
+" TODO sometimes "gd" doesn't work and sends me on another line, but it's not
+" the declaration. maybe try to be fool-proof about it and realise by
+" myself that I should use ctags.
+"
+" TODO C++ access (public, private, protected) parsing doesn't always work. the reason
+" is that ctags only looks at the implementation. so in the .cpp or the .h.
+" if the implementation is in the .cpp, getting the access would require ctags to look in
+" in the .h, which it does not do.. for now I think it's acceptable.. if someone has
+" an idea to work around this..
+" 
 " TODO move the ruby code out of this file except for the printPossibleCompletions method: I have at least another plugin using this code and other people might want to reuse the class too.
 " TODO differenciate static functions from non-static ones. in completion that's very useful (Class:: should only be completed by static methods and object:: should only be completed by non-static methods)
 " TODO support C structs?
@@ -137,7 +154,7 @@ function! s:JumpToDef(var)
 		" and the function was called with the cursor on the declaration
 		" itself.
 		" but in that case we don't really care, we rarely want to type eg
-		" MyClass a.test()
+		" MyClass a.test(), it would be more MyClass a;
 		" so in this context we shouldn't care about completion.
 		let s:usingTag = 1
 		execute "tag"
@@ -170,7 +187,7 @@ class Tag
 	attr_reader :name
 	attr_reader :className
 	attr_reader :type
-	attr_reader :inherits # this has to become a list.
+	attr_reader :inherits
 	attr_reader :access
 
 	def initialize(name, file, type, line, scope, inherits, className, access)
@@ -199,7 +216,7 @@ class Tag
 		
 		ctag_infos_base = ctag_infos[0].split("\t")
 		ctag_infos_ext = ctag_infos[1].split("\t")
-		index = 0
+		index = 2 # at 0 it's "", at 1 it's the tag type (c, m, f, ...)
 		while (ctag_infos_ext[index] != nil)
 			info = ctag_infos_ext[index].split(":")
 			# possible optimisation: call chomp only
@@ -209,16 +226,16 @@ class Tag
 				line = info[1].chomp
 			end
 			if (info[0] == "inherits")
-				inherits = info[1].chomp
+				inherits = info[1].chomp.split(",")
 			end
-			if (info[0] == "class")
+			if ( (info[0] == "class") || (info[0] == "interface") )
 				className = info[1].chomp
 			end
 			if (info[0] == "access")
 				access = info[1].chomp
 			end
 			index = index + 1
-end
+		end
 		# since there is no ctag_infos_ext[index], there will
 		# be a carriage return here.
 # 		ctag_infos_ext[index-1].chomp!
@@ -227,7 +244,7 @@ end
 # 		if (scope != nil)
 # 			scope.chomp!
 # 		end
-		return Tag.new(ctag_infos_base[0], ctag_infos_base[1], ctag_infos_ext[1], line, scope, inherits, className, access)
+		return Tag.new(ctag_infos_base[0].chomp, ctag_infos_base[1].chomp, ctag_infos_ext[1].chomp, line, scope, inherits, className, access)
 	end
 
 	# is this tag a method? (language dependant)
@@ -244,18 +261,6 @@ end
 		return "cpp" if ( (@file =~ /cpp\Z/) || (@file =~ /cc\Z/) || (@file =~ /h\Z/) || (@file =~ /hpp\Z/) )
 	end
 
-	# does this tag belongs to the class
-	# of class name className? (works with
-	# inheritance)
-	def belongsToClass?(className)
-		if (@className == className)
-			return true
-		end
-		if (@inherits == className)
-			return true
-		end
-		return false
-	end
 end
 
 class TagList
@@ -329,7 +334,10 @@ class TagList
 		# 12 seconds to instantaneous...
 		return nil if @blacklist.include?(className)
 		@tags.each { |tag|
-			if ( (tag.type == "c") && (tag.name == className) )
+			# the "c" is for "class" and the "i" is for
+			# java interfaces.
+			if ( ( (tag.type == "c") || (tag.type == "i") )\
+					 && (tag.name == className) )
 # 				@classByName[className] = tag
 				return tag
 			end
@@ -340,7 +348,7 @@ class TagList
 		# and blacklist the tag, to avoid to walk the tag list again
 		# for it later.
 		@blacklist.push(className)
-		nil
+		return nil
 	end
 
 	# returns true if A inherits B
@@ -353,16 +361,23 @@ class TagList
 		# we warn the user in classByName, no reason to crash
 		# one second later for it.
 		return false if (tagA == nil)
-		if (tagA.inherits == classB)
+		return false if (tagA.inherits == nil)
+
+		if (tagA.inherits.include?(classB))
 # 			puts "##"+ classA + "DOES inherit from " + classB
 			return true
 		end
-		if ( (tagA.inherits == "") || (tagA.inherits == nil) )
+		if (tagA.inherits == nil)
 			return false
 		end
 		# that's recursive. eg if A->B->C, A *does*
 		# inherit from C..
-		return inheritance?(classByName(tagA.inherits), classB)
+		tagA.inherits.each { |subClassName|
+			if (inheritance?(classByName(subClassName), classB))
+				return true
+			end
+		}
+		return false
 	end
 
 end
