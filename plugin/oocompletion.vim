@@ -1,6 +1,7 @@
-" written by emmanuel.touzery <emmanuel.touzery@wanadoo.fr>
+" written by emmanuel.touzery <emmanuel.touzery {at} wanadoo {dot} fr> and Luc Hermitte
+" <hermitte {at} free {dot} fr>
 " released under the VIM license.
-" version: 0.3
+" version: 0.4
 " This plugin will provide functions to get "code completion" in vim.
 " it will list all methods for the identifier under the cursor.
 " when you start typing a method, it will tell you which methods of the
@@ -10,7 +11,7 @@
 " NOTE: this includes inheritance! functions of the class and the parents
 " classes are listed
 " normally also only public member functions are listed (TODO all methods
-" are listed in C++ due to a parsing bug) (TODO be smart and show only static functions or everything
+" are listed in C++ due to a ctags limitation) (TODO be smart and show only static functions or everything
 " but static functions)
 " This plugin requires tags to be generated with certain parameters (it
 " needs information about inheritance and access of members).
@@ -22,9 +23,8 @@
 " any feedback is welcome.. it works for me (tm)
 "
 " REPORTING BUGS: I am using ctags 5.3.1. Please try upgrading if your version is older
-" This plugin is untested under windows.
 
-
+" TODO {{{1
 " TODO it's known that the plugin does not work if you ask for the list of functions
 " IN THE DECLARATION. eg
 " MyClass a;
@@ -32,6 +32,8 @@
 " gd doesn't move the cursor (we are already on the declaration!), therefore the plugin
 " thinks that gd failed. I think it's acceptable because we would be interested in
 " completion only when actually using the object, not when declaring it.
+"
+" keep timestamps for tags?
 "
 " TODO sometimes "gd" doesn't work and sends me on another line, but it's not
 " the declaration. maybe try to be fool-proof about it and realise by
@@ -46,11 +48,12 @@
 " TODO move the ruby code out of this file except for the printPossibleCompletions method: I have at least another plugin using this code and other people might want to reuse the class too.
 " TODO differenciate static functions from non-static ones. in completion that's very useful (Class:: should only be completed by static methods and object:: should only be completed by non-static methods)
 " TODO support C structs?
-" TODO use the "tags" variable to know where to look for the tags file?
 " TODO optimise (should be easy: only parse/instanciate in memory what I need, not all the tags..)
 " TODO advanced stuff, like C++ template support, which is SURE not to work :O)
 " TODO more languages. for now only C++ and Java work.
 
+
+" Commmands {{{1
 " call this command to generate the correct tag file.
 " this command will ALWAYS generate the tag file, even if it's
 " not necessary (if the tags are up-to-date)
@@ -73,20 +76,21 @@ command! -nargs=0 PossibleCompletions call s:PossibleCompletions()
 " then with :tag. it just fools around doing "b" and tries guessing the type.
 command! -nargs=0 Type call s:TypeUnderCursor()
 
-function! s:GenerateTags()
+" Functions {{{1
+
+function! s:GenerateTags() " {{{2
 	silent! call system("ctags --file-scope=no -R --fields=+ia *")
 endfunction
 
-function! s:PossibleFunctions()
+function! s:PossibleFunctions() " {{{2
 " 	echo strftime("%Y %b %d %X")
-	call <SID>Type(expand("<cword>"))
-	if s:type == ""
-		return
+	let type = s:Type(expand("<cword>"))
+	if type != ""
+		call s:PrintPossibleCompletions(type, "")
 	endif
-	call <SID>PrintPossibleCompletions(s:type, "")
 endfunction
 
-function! s:PossibleCompletions()
+function! s:PossibleCompletions() " {{{2
 	" beginning is what you typed, the beginning of the
 	" name of the method. We will list all methods whose
 	" name start by "beginning".
@@ -97,57 +101,56 @@ function! s:PossibleCompletions()
 	" of that class.
 	let var = ""
 	while ( (var == "") || (var == beginning) )
-		execute "normal b"
+		normal! b
 		let var = expand("<cword>")
 	endwhile
 " 	echo beginning
 " 	echo var
-	call <SID>Type(var)
-	if (s:type == "")
-		return
+	let type =s:Type(var)
+	if (type != "")
+		call s:PrintPossibleCompletions(type, beginning)
 	endif
-	call <SID>PrintPossibleCompletions(s:type, beginning)
 endfunction
 
-function! s:TypeUnderCursor()
-	call <SID>Type(expand("<cword>"))
+function! s:TypeUnderCursor() " {{{2
+	call s:Type(expand("<cword>"))
 endfunction
 
-function! s:Type(var)
+function! s:Type(var) " {{{2
 	let var = a:var
+
+	let line = line(".")
+	let col = virtcol(".")
 
 	" jump to the definition of the variable,
 	" using gd or ctags.
-	call <SID>JumpToDef(var)
+	call s:JumpToDef(var, line, col)
 
 	" check previous word
-	execute "normal b"
+	normal! b
 	let type = expand("<cword>")
 	" down there I test if the possible type is not the
 	" variable itself, because for instance char **argv,
 	" a "b" brings on **argv, and expand("<cword>") gives
 	" argv...
-	while ( (!<SID>IsType(type)) || (type == var) )
-		execute "normal b"
+	while ( (!s:IsType(type)) || (type == var) )
+		normal! b
 		let type = expand("<cword>")
 	endwhile
 
 	" get back where the cursor was when i was called.
-	call <SID>JumpBack()
+	call s:JumpBack(line, col)
 
 	" informative for the user: display the type that we
 	" discovered.
 	echo type
-	let s:type = type
+	return type
 endfunction
 
-function! s:JumpToDef(var)
-	let line = line(".")
-	let col = col(".")
-	execute "normal mw"
-	execute "normal gd"
+function! s:JumpToDef(var, curLine, curVirtCol) " {{{2
+	normal! gd
 	let s:usingTag = 0
-	if ( (col(".") == col) && (line(".") == line) )
+	if ( (virtcol(".") == a:curVirtCol) && (line(".") == a:curLine) )
 " 		echo "gd failed"
 		" actually gd did not necessarily failed.
 		" it's possible that the use is its own declaration eg MyClass a;
@@ -163,23 +166,138 @@ function! s:JumpToDef(var)
 	endif
 endfunction
 
-function! s:JumpBack()
+function! s:JumpBack(line, virtCol) " {{{2
 	if s:usingTag
 		exe "pop"
 	else
-		execute "normal `w"
+		exe a:line.'normal! '.a:virtCol.'|'
+
 	endif
 endfunction
 
-function! s:IsType(type)
-	return ( (a:type != "const") && ( a:type != "*const") && (a:type != "*") )
+function! s:IsType(type) " {{{2
+	" thanks to Luc Hermitte for suggesting looking for '&' too.
+	return ( (a:type != "const") && ( a:type != "*const") && (a:type != "*") && (a:type != "&") )
 endfunction
 
 " optimise...
-function! s:PrintPossibleCompletions(type, beginning)
+function! s:PrintPossibleCompletions(type, beginning) " {{{2
 let s:type = a:type
 let s:beginning = a:beginning
-ruby <<EOF
+ruby<<EOF
+def tagFiles()
+	# get the 'tags' VIM variable
+	tagsVar = VIM::evaluate("&tags") #"./tags,/"
+
+	# if the user does not have his/her
+	# 'tags' variable set :
+	if ( (tagsVar == "") || (tagsVar == nil) )
+		# we provide a reasonnable default :
+		tagsVar = "./tags,/"
+	end
+
+	curDir = curVimDir()
+	# As the current directory may contain spaces, we need to reintroduce
+	# backspaces in the current directory.
+	curDir.gsub!(/ /, '\\ ')
+	
+	# replace eg ./tags by `pwd`.tags
+	# this is useful for the uniq! done
+	# at the end of this function.
+	# i don't want to parse once `pwd`/tags
+	# and once ./tags...
+	tagsVar.gsub!(/^\./, curDir)
+
+	# we split by " " but NOT by "\ ",
+	# which is a valid space in a filename
+	result = tagsVar.scan(/(?:\\ |[^,; ])+/)
+
+	# now we remove the "\ ", ruby
+	# otherwise later when we replace
+	# all the "\" by "/" for the windows
+	# paths, all is messed up.
+	result.each { |tr|
+		tr.gsub!(/\\ / ," ")
+
+		# in here i want only paths with "/"
+		# separators. that's the ruby way
+		# (hey, i didn't say i think it's a good
+		# idea :O/)
+		tr.gsub!(/\\/, "/")
+	}
+
+	# we support the "/" trick: if 'tags'
+	# include "/", then we check all the files
+	# in directories under us.
+	if result.include?("/")
+		result.delete("/")
+		# now we must add "pwd/tags" and all subdirs
+# 		# we start at the dir under us.
+# 		curDir = dirUp(Dir.pwd)
+		# current directory
+		curDir = curVimDir() 
+		while (!File.rootDir?(curDir))
+			result.push(curDir + "/tags")
+			curDir = File.dirUp(curDir)
+		end
+		# we didn't add rootdir/tags yet
+		result.push("#{curDir}/tags")
+	end
+	# remove duplicate dirs
+	result.uniq!
+
+	return result
+end
+
+# return the current directory.
+# depending on cpoptions, this might
+# be the path of the current file, or
+# the current directory itself (and those
+# might of course be different)
+def curVimDir()
+	# is pwd(), if 'cpoptions' contains 'd'
+	if (VIM::evaluate('&cpoptions').include?(?d))
+		curDir = Dir.pwd
+	else
+		curDir = VIM::evaluate("expand('%:p:h')")
+	end
+	return curDir
+end
+
+# some more methods for the class
+# file...
+class File
+	# will return path itself if path
+	# is the root of the drive.
+	# requires "/" as the dir separator,
+	# even on windows (do a gsub to fix it
+	# if needed)
+	def File.dirUp(path)
+		# remove final "/" if there is one
+		cleanPath = path.chomp(File::SEPARATOR)
+		return path if (File.rootDir?(path))
+		File.split(cleanPath)[0]
+	end
+
+	# is this dir the root dir?
+	# requires "/" as the dir separator,
+	# even on windows (do a gsub to fix it
+	# if needed)
+	def File.rootDir?(path)
+		# remove final "/" if there is one
+		cleanPath = path.chomp(File::SEPARATOR)
+		# UNIX root dir:
+		return true if path == "/"
+		# windows network drives \\machine\drive\dir
+		# we're at the root if it's something like
+		# \\machine\drive
+		return true if cleanPath =~ %r{^//\w+/\w+$}
+		# now standard windows root directories
+		# (a: c: d: ...)
+		return true if cleanPath =~ /^[a-zA-Z]:$/
+		return false
+	end
+end
 
 # manages one tag.
 class Tag
@@ -206,15 +324,34 @@ class Tag
 		return "tag, name : " + @name + ", file : " + @file + ", type : " + @type + ", line : " + ((@line==nil)?(""):(@line)) + ", scope : " + ((@scope == nil)?(""):(@scope)) + ", inherits : " + ((@inherits == nil)?(""):(@inherits)) + ", className : " + ((@className == nil)?(""):(@className)) + ", access : \"" + ((@access == nil)?(""):(@access)) + "\""
 	end
 
+	# for now "==" is not defined for speed (i often do comparisons
+	# will nil)
+
+	# I need a hash method because Array.uniq uses it
+	# to remove duplicate elements and I want that duplicate
+	# elements are properly accounted for...
+	def hash
+		return @name.hash() + @type.hash()
+	end
+
+	# http://165.193.123.250/book/ref_c_object.html#Object.hash
+	# "must have the property that a.eql?(b) implies a.hash == b.hash."
+	# without this, Array.uniq doesn't work properly.
+	def eql?(other)
+		return hash == other.hash
+	end
+
 	# here is a ctags line:
 	# ENTRY_AUTH_KEYCHANGE	snmp/usm/SnmpUser.java	/^	public static final String ENTRY_AUTH_KEYCHANGE = ".6";$/;"	f	class:SnmpUser	access:default
-	def Tag.getTagFromCtag(ctag_line)
+	def Tag.getTagFromCtag(ctag_line, knownTags)
 
 		# ;\ separates the "extended" information
 		# from the standard one.
 		ctag_infos = ctag_line.split(";\"")
 		
 		ctag_infos_base = ctag_infos[0].split("\t")
+	
+
 		ctag_infos_ext = ctag_infos[1].split("\t")
 		index = 2 # at 0 it's "", at 1 it's the tag type (c, m, f, ...)
 		while (ctag_infos_ext[index] != nil)
@@ -244,7 +381,14 @@ class Tag
 # 		if (scope != nil)
 # 			scope.chomp!
 # 		end
-		return Tag.new(ctag_infos_base[0].chomp, ctag_infos_base[1].chomp, ctag_infos_ext[1].chomp, line, scope, inherits, className, access)
+		result = Tag.new(ctag_infos_base[0].chomp, ctag_infos_base[1].chomp, ctag_infos_ext[1].chomp, line, scope, inherits, className, access)
+		# if the tag is already known..
+# 		if (knownTags.include?(result))
+# # 			puts "already known tag"
+# 			# don't parse it again
+# 			return nil
+# 		end
+		return result
 	end
 
 	# is this tag a method? (language dependant)
@@ -253,6 +397,11 @@ class Tag
 		lang = language()
 		return (@type == "m") if (lang == "java")
 		return (@type == "f") if (lang == "cpp")
+	end
+
+	# is this tag defining a class? (language dependant)
+	def tagClass?()
+		return (@type == "c") || (@type == "i")
 	end
 
 	# language for this tag (do it in the constructor and cache it?)
@@ -265,8 +414,13 @@ end
 
 class TagList
 	def initialize()
+
+# TODO split normal tags and class tags.
+
 		# will contain all the tags of the tag file.
-		@tags = Array.new()
+		@nonClassTags = Array.new()
+		@classTags = Array.new()
+		@matchingTags = Array.new()
 # 		@classByName = Hash.new()
 
 		# will contain an Array<String> containing
@@ -276,49 +430,106 @@ class TagList
 		# not have the tag info for all QT classes..
 		# this is for performance (see classByName)
 		@blacklist = Array.new()
+
+		# will contain the name of all the classes that were
+		# not found in the researches through the directories
+		# may contain duplicate names
+		# may contain classes that were not found in one directory
+		# and found in another. you'll have to do a "detect" at
+		# the end to find the relevant ones.
+		@missingClasses = Array.new()
 	end
 
 	# parsing. TODO: parse only what I need..
-	# currently this is very slow.. I had up to
-	# 12s when trying on kword source code...
-	def addTags()
-		file = File.open("tags")
+	def parseTags(tagFile)
+
+		# if we want to keep all info
+		# in memory, don't remove the already
+		# parsed tags. otherwise, remove them,
+		# we'll keep the relevant stuff in
+		# matchingTags.
+		if (!$keepAllInfo)
+			@nonClassTags = Array.new
+		end
+
+		file = File.open(tagFile)
 
 		# now we parse the ctags output
 		file.each_line { |ctags_line|
 
 			# skip comments in the ctags file
-			if (ctags_line =~ "^!_")
-				next
-			end
-			tag = Tag.getTagFromCtag(ctags_line)
+			next if (ctags_line =~ "^!_")
+
+			tag = Tag.getTagFromCtag(ctags_line, @matchingTags)
 # 			puts tag.to_s
-			@tags.push(tag)
+# 			if (tag != nil)
+			if (tag.tagClass?())
+				@classTags.push(tag)
+			else
+				@nonClassTags.push(tag)
+			end
 		}
 		file.close
 	end
-
+	
 	# list public methods of this taglist that
 	# have the class name you give and which (the methods)
 	# names start with "beginning".
 	def listMethods(className, beginning)
-		puts "****** now listing methods."
-# 		indexa = 0
-		classSearched = classByName(className)
-		@tags.each { |tag|
-#			if (tag.type != "c " && tag.name != tag.className && indexa < 50 && tag.className != "")
-# 				puts "considering " + tag.to_s
-#				indexa = indexa + 1 
-#			end
-			if ( (tag.tagMethod?()) \
-			&& (tag.name =~ "^#{beginning}") \
-			&& ( (tag.className == className) || inheritance?(classSearched, tag.className) ) )
+		tagFiles().each { |curFile|
+			next if (!FileTest.exist?(curFile))
+			searchForMethods(curFile, className, beginning)
+			#puts "black list size " + @blacklist.size.to_s + " " + @blacklist[0]
+			@missingClasses += @blacklist
+			@blacklist.clear
+		}
+	end
+
+	def putsMethods()
+		@missingClasses.uniq!
+		@missingClasses.each { |className|
+			item = @matchingTags.detect { |tag|
+				(tag.name == className)
+			}
+			if (item == nil)
+				puts "WARNING: did not find definition of " + className
+			end
+		}
+ 		@matchingTags.uniq!
+		@matchingTags.each { |tag|
+			if ( tag.tagMethod?() && ( (tag.access == "public") \
+					|| (tag.access == "") \
+					|| (tag.access == nil) ) )
+				puts tag.name + " [" + tag.className + "]"
+			end
+		}
+	end
+
+	def searchForMethods(tagFile, classSearchedName, beginning)
+		if (VIM::evaluate("&verbose").to_i > 0)
+			puts "parsing tags for " + tagFile
+		end
+		parseTags(tagFile)
+		#puts "call classByName #1"
+		if @classSearched == nil
+			@classSearched = classByName(classSearchedName)
+		end
+		@nonClassTags.each { |tag|
+			# the goal is to catch classes because i'll
+			# need the classes info,
+			# when i'll go down the dir hierarchy.
+
+			if ( ( (tag.className == classSearchedName) || inheritance?(@classSearched, tag.className) ) && (tag.name =~ "^#{beginning}") )
 #				puts "considering " + tag.to_s
 				# only display public methods:
-				# the "" and nil are WORKAROUNDS for bugs in C++ parsing for now.
-				if ( (tag.access == "public") || (tag.access == "") || (tag.access == nil) )
-					puts tag.name + " [" + tag.className + "]"
-				end
+				# the "" and nil are here because of insufficient info from ctags for C++
+				# TODO i can strip one of "" or nil out i guess.
+# 				if ( (tag.access == "public") \
+# 						|| (tag.access == "") \
+# 						|| (tag.access == nil) )
+# 					puts tag.name + " [" + tag.className + "]"
+					@matchingTags.push(tag)
+# 				end
 			end
 		}
 	end
@@ -333,20 +544,17 @@ class TagList
 		# this happened with KoRect in kword, and the time went from
 		# 12 seconds to instantaneous...
 		return nil if @blacklist.include?(className)
-		@tags.each { |tag|
-			# the "c" is for "class" and the "i" is for
-			# java interfaces.
-			if ( ( (tag.type == "c") || (tag.type == "i") )\
-					 && (tag.name == className) )
-# 				@classByName[className] = tag
+		@classTags.each { |tag|
+			if (tag.name == className)
+#				@classByName[className] = tag
+				#puts "classByName: found " + tag.name
 				return tag
 			end
 		}
+		
 		# if we are here, we failed to find the tag for className.
 		# warn the user
-		puts "*** WARNING: no tag information for #{className}. Ignoring it, but the function list might be incomplete."
-		# and blacklist the tag, to avoid to walk the tag list again
-		# for it later.
+# 		puts "adding the class " + className + " in the blacklist"
 		@blacklist.push(className)
 		return nil
 	end
@@ -382,9 +590,15 @@ class TagList
 
 end
 
+# this file separator API is badly broken
+# or I missed something..
+
 # puts "ruby invoked : " + Time.now.min.to_s + ":"+ Time.now.sec.to_s
+$keepAllInfo = false 
 taglist = TagList.new()
-taglist.addTags()
 taglist.listMethods(VIM::evaluate("s:type"), VIM::evaluate("s:beginning"))
+taglist.putsMethods()
 EOF
 endfunction
+" ======================================================================
+" vim600: set fdm=marker:
